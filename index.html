@@ -56,10 +56,10 @@
         }
 
         buildUI() {
-          // 空間UIパネルを作成
+          // 空間UIパネルを作成 (幅情報の追加に伴い少し高さを拡張)
           this.panel = new xb.SpatialPanel({
             width: 1.4,
-            height: 0.9,
+            height: 1.0,
             backgroundColor: '#4a235aaa' // ナスをイメージした紫色の半透明
           });
           
@@ -68,7 +68,7 @@
           const grid = this.panel.addGrid();
 
           // タイトル
-          grid.addRow({weight: 0.2}).addText({
+          grid.addRow({weight: 0.15}).addText({
             text: '🍆 ナス自動測定システム',
             fontColor: '#af7ac5',
             fontSize: 0.08
@@ -76,26 +76,34 @@
 
           // ステータス案内
           this.statusText = grid.addRow({weight: 0.15}).addText({
-            text: '空中でピンチして、ナスの形をなぞってください',
+            text: 'ピンチで長さをなぞり、指を開いて太さを測ります',
             fontColor: '#ffffff',
             fontSize: 0.04
           });
 
-          // 測定結果表示行
-          const dataRow = grid.addRow({weight: 0.35});
+          // 測定結果表示行 (長さ・曲がり)
+          const dataRow = grid.addRow({weight: 0.25});
           this.lengthText = dataRow.addCol({weight: 0.5}).addText({
             text: '長さ: 0.0 cm',
             fontColor: '#ffffff',
-            fontSize: 0.07
+            fontSize: 0.1
           });
           this.bendText = dataRow.addCol({weight: 0.5}).addText({
             text: '曲がり: 0.0 cm',
             fontColor: '#ffffff',
+            fontSize: 0.1
+          });
+
+          // 測定結果表示行 (太さ / 指の開き幅)
+          const widthRow = grid.addRow({weight: 0.2});
+          this.widthText = widthRow.addCol({weight: 1.0}).addText({
+            text: '太さ: 0.0 cm',
+            fontColor: '#f39c12',
             fontSize: 0.07
           });
 
           // 等級判定表示
-          this.gradeText = grid.addRow({weight: 0.3}).addText({
+          this.gradeText = grid.addRow({weight: 0.25}).addText({
             text: '判定: -',
             fontColor: '#ffffff',
             fontSize: 0.09
@@ -103,10 +111,13 @@
         }
 
         /**
-         * 毎フレーム呼ばれる更新処理（頭の動きに合わせてUIを追従させる）
+         * 毎フレーム呼ばれる更新処理
+         * 頭の動きに合わせてUIを追従させつつ、ハンドトラッキングで指の距離を測定する
          */
         update() {
           super.update();
+          
+          // UIパネルの追従
           if (this.panel) {
             const camera = xb.core.camera;
             
@@ -117,6 +128,35 @@
             // パネルの位置と回転をカメラに滑らかに追従させる（lerp/slerp）
             this.panel.position.lerp(targetPos, 0.1);
             this.panel.quaternion.slerp(camera.quaternion, 0.1);
+          }
+
+          // ナスを指で挟んだ時の幅（親指と人差し指の距離）を計算
+          let currentMaxWidth = 0;
+          if (xb.user.hands && xb.user.hands.hands) {
+            for (const hand of xb.user.hands.hands) {
+              const joints = hand.joints;
+              // 親指の先端と人差し指の先端のジョイントが取得できるか確認
+              if (joints && joints['thumb-tip'] && joints['index-finger-tip']) {
+                const thumbPos = joints['thumb-tip'].position;
+                const indexPos = joints['index-finger-tip'].position;
+                
+                // THREE.Vector3に変換して距離を計算
+                const vThumb = new THREE.Vector3(thumbPos.x, thumbPos.y, thumbPos.z);
+                const vIndex = new THREE.Vector3(indexPos.x, indexPos.y, indexPos.z);
+                const dist = vThumb.distanceTo(vIndex);
+                
+                // 両手を使っている場合は最も大きく開いている方の値を採用
+                if (dist > currentMaxWidth) {
+                  currentMaxWidth = dist;
+                }
+              }
+            }
+          }
+          
+          // リアルタイムに幅をUIに反映
+          if (this.widthText && currentMaxWidth > 0) {
+            const widthCm = (currentMaxWidth * 100).toFixed(1);
+            this.widthText.setText(`太さ: ${widthCm} cm`);
           }
         }
 
