@@ -35,6 +35,8 @@
 
       /**
        * 手に持ったナスをなぞって測定するXRスクリプト
+       * 左手：指の開きで太さを測定
+       * 右手：ピンチでなぞって長さと曲がりを測定
        */
       class EggplantMeasurement extends xb.Script {
         init() {
@@ -50,13 +52,14 @@
           // 測定データ保持用
           this.points = [];
           this.currentPainter = null;
+          this.isDrawing = false;
 
           // UIパネルの構築
           this.buildUI();
         }
 
         buildUI() {
-          // 空間UIパネルを作成 (幅情報の追加に伴い少し高さを拡張)
+          // 空間UIパネルを作成
           this.panel = new xb.SpatialPanel({
             width: 1.4,
             height: 1.0,
@@ -76,7 +79,7 @@
 
           // ステータス案内
           this.statusText = grid.addRow({weight: 0.15}).addText({
-            text: 'ピンチで長さをなぞり、指を開いて太さを測ります',
+            text: '右手ピンチで長さをなぞり、左手を開いて太さを測ります',
             fontColor: '#ffffff',
             fontSize: 0.04
           });
@@ -112,7 +115,7 @@
 
         /**
          * 毎フレーム呼ばれる更新処理
-         * 頭の動きに合わせてUIを追従させつつ、ハンドトラッキングで指の距離を測定する
+         * 頭の動きに合わせてUIを追従させつつ、左手のハンドトラッキングで太さを測定する
          */
         update() {
           super.update();
@@ -120,41 +123,35 @@
           // UIパネルの追従
           if (this.panel) {
             const camera = xb.core.camera;
-            
-            // カメラの前方パネル距離の位置を計算
-            // 手に被らないように、Y軸の値を -0.2 から 0.2 に変更し、少し上に配置します
+            // 手に被らないように、少し上に配置します
             const targetPos = new THREE.Vector3(0, 0.5, -xb.user.panelDistance);
             targetPos.applyMatrix4(camera.matrixWorld);
-            
-            // パネルの位置と回転をカメラに滑らかに追従させる（lerp/slerp）
+            // パネルの位置と回転をカメラに滑らかに追従させる
             this.panel.position.lerp(targetPos, 0.1);
             this.panel.quaternion.slerp(camera.quaternion, 0.1);
           }
 
-          // ナスを指で挟んだ時の幅（親指と人差し指の距離）を計算
+          // 「左手」のみでナスの幅（親指と人差し指の距離）を計算
           let currentMaxWidth = 0;
           if (xb.user.hands && xb.user.hands.hands) {
-            for (const hand of xb.user.hands.hands) {
-              const joints = hand.joints;
+            // 左手を取得 (xb.Handedness.LEFT は定数)
+            const leftHand = xb.user.hands.hands[xb.Handedness.LEFT];
+            if (leftHand && leftHand.joints) {
+              const joints = leftHand.joints;
               // 親指の先端と人差し指の先端のジョイントが取得できるか確認
-              if (joints && joints['thumb-tip'] && joints['index-finger-tip']) {
+              if (joints['thumb-tip'] && joints['index-finger-tip']) {
                 const thumbPos = joints['thumb-tip'].position;
                 const indexPos = joints['index-finger-tip'].position;
                 
                 // THREE.Vector3に変換して距離を計算
                 const vThumb = new THREE.Vector3(thumbPos.x, thumbPos.y, thumbPos.z);
                 const vIndex = new THREE.Vector3(indexPos.x, indexPos.y, indexPos.z);
-                const dist = vThumb.distanceTo(vIndex);
-                
-                // 両手を使っている場合は最も大きく開いている方の値を採用
-                if (dist > currentMaxWidth) {
-                  currentMaxWidth = dist;
-                }
+                currentMaxWidth = vThumb.distanceTo(vIndex);
               }
             }
           }
           
-          // リアルタイムに幅をUIに反映
+          // リアルタイムに太さをUIに反映
           if (this.widthText && currentMaxWidth > 0) {
             const widthCm = (currentMaxWidth * 100).toFixed(1);
             this.widthText.setText(`太さ: ${widthCm} cm`);
@@ -244,9 +241,9 @@
 
             this.gradeText.fontColor = textColor;
             this.gradeText.setText(`判定: ${finalGradeStr}`);
-            this.statusText.setText('測定完了！再度ピンチすると新しく測定します。');
+            this.statusText.setText('測定完了！右手で再度ピンチすると新しく測定します。');
 
-            // 描画されたナスの色を「曲がりの基準」の判定結果色に変更
+            // 描画されたナスの色を判定結果色に変更
             if (this.currentPainter && this.currentPainter.mesh) {
               this.currentPainter.mesh.material.color.setHex(colorHex);
             }
@@ -259,7 +256,7 @@
           } else {
             this.gradeText.fontColor = '#ffffff';
             this.gradeText.setText(`測定中...`);
-            this.statusText.setText('ナスをなぞっています...');
+            this.statusText.setText('右手でナスをなぞっています...');
             
             // 測定中はパネルの背景色をナス色に戻す
             if (this.panel) {
@@ -270,9 +267,14 @@
         }
 
         /**
-         * ピンチ開始：新しい測定線を書き始める
+         * ピンチ開始：新しい測定線を書き始める（右手のみ）
          */
         onSelectStart(event) {
+          const controllerId = event.target.userData.id;
+          // 左手の場合は描画処理を行わない
+          if (controllerId === xb.Handedness.LEFT) return;
+
+          this.isDrawing = true;
           const id = event.target.userData.id;
           const cursor = xb.core.user.getPivotPosition(id);
 
@@ -293,14 +295,19 @@
         }
 
         /**
-         * ピンチ中：軌跡を追加して描画と計算を更新
+         * ピンチ中：軌跡を追加して描画と計算を更新（右手のみ）
          */
         onSelecting(event) {
+          if (!this.isDrawing) return;
+          const controllerId = event.target.userData.id;
+          // 左手の場合は描画処理を行わない
+          if (controllerId === xb.Handedness.LEFT) return;
+
           const id = event.target.userData.id;
           const cursor = xb.core.user.getPivotPosition(id);
 
           const lastPoint = this.points[this.points.length - 1];
-          // 5mm以上の移動があった場合のみポイントを追加（手のブレ・ノイズ軽減）
+          // 5mm以上の移動があった場合のみポイントを追加（手のブレ軽減）
           if (cursor.distanceTo(lastPoint) > 0.005) {
             this.currentPainter.lineTo(cursor);
             this.currentPainter.update();
@@ -310,13 +317,20 @@
         }
 
         /**
-         * ピンチ終了：測定結果を確定し等級を判定
+         * ピンチ終了：測定結果を確定し等級を判定（右手のみ）
          */
         onSelectEnd(event) {
+          if (!this.isDrawing) return;
+          const controllerId = event.target.userData.id;
+          // 左手の場合は処理を行わない
+          if (controllerId === xb.Handedness.LEFT) return;
+
+          this.isDrawing = false;
+
           if (this.points.length > 2) {
             this.updateUI(true);
           } else {
-            this.statusText.setText('短すぎます。最初からやり直してください。');
+            this.statusText.setText('短すぎます。右手で最初からやり直してください。');
           }
         }
       }
