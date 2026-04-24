@@ -122,7 +122,8 @@
             const camera = xb.core.camera;
             
             // カメラの前方パネル距離の位置を計算
-            const targetPos = new THREE.Vector3(0, -0.2, -xb.user.panelDistance);
+            // 手に被らないように、Y軸の値を -0.2 から 0.2 に変更し、少し上に配置します
+            const targetPos = new THREE.Vector3(0, 0.5, -xb.user.panelDistance);
             targetPos.applyMatrix4(camera.matrixWorld);
             
             // パネルの位置と回転をカメラに滑らかに追従させる（lerp/slerp）
