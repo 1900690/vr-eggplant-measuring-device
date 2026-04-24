@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <title>ナス測定VR | XR Blocks</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <link type="text/css" rel="stylesheet" href="https://xrblocks.github.io/css/xr.css" />
+    <script>
+      window.litDisableBundleWarning = true;
+    </script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/",
+          "troika-three-text": "https://cdn.jsdelivr.net/gh/protectwise/troika@028b81cf308f0f22e5aa8e78196be56ec1997af5/packages/troika-three-text/src/index.js",
+          "troika-three-utils": "https://cdn.jsdelivr.net/gh/protectwise/troika@v0.52.4/packages/troika-three-utils/src/index.js",
+          "troika-worker-utils": "https://cdn.jsdelivr.net/gh/protectwise/troika@v0.52.4/packages/troika-worker-utils/src/index.js",
+          "bidi-js": "https://esm.sh/bidi-js@%5E1.0.2?target=es2022",
+          "webgl-sdf-generator": "https://esm.sh/webgl-sdf-generator@1.1.1/es2022/webgl-sdf-generator.mjs",
+          "lit": "https://cdn.jsdelivr.net/gh/lit/dist@3/core/lit-core.min.js",
+          "lit/": "https://esm.run/lit@3/",
+          "xrblocks": "https://cdn.jsdelivr.net/npm/xrblocks@0.11.0/build/xrblocks.js",
+          "xrblocks/addons/": "https://cdn.jsdelivr.net/npm/xrblocks@0.11.0/build/addons/"
+        }
+      }
+    </script>
+  </head>
+
+  <body>
+    <script type="module">
+      import 'xrblocks/addons/simulator/SimulatorAddons.js';
+      import * as THREE from 'three';
+      import * as xb from 'xrblocks';
+      import { TubePainter } from 'three/addons/misc/TubePainter.js';
+
+      /**
+       * 手に持ったナスをなぞって測定するXRスクリプト
+       */
+      class EggplantMeasurement extends xb.Script {
+        init() {
+          // 空間の基準となるピボット（ポインター位置）を有効化
+          xb.core.user.enablePivots();
+
+          // 明るめのライトを追加
+          this.add(new THREE.HemisphereLight(0xffffff, 0x888888, 3));
+          const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+          dirLight.position.set(0, 4, 0);
+          this.add(dirLight);
+
+          // 測定データ保持用
+          this.points = [];
+          this.currentPainter = null;
+
+          // UIパネルの構築
+          this.buildUI();
+        }
+
+        buildUI() {
+          // 空間UIパネルを作成
+          this.panel = new xb.SpatialPanel({
+            width: 1.4,
+            height: 0.9,
+            backgroundColor: '#4a235aaa' // ナスをイメージした紫色の半透明
+          });
+          
+          this.add(this.panel);
+
+          const grid = this.panel.addGrid();
+
+          // タイトル
+          grid.addRow({weight: 0.2}).addText({
+            text: '🍆 ナス自動測定システム',
+            fontColor: '#af7ac5',
+            fontSize: 0.08
+          });
+
+          // ステータス案内
+          this.statusText = grid.addRow({weight: 0.15}).addText({
+            text: '空中でピンチして、ナスの形をなぞってください',
+            fontColor: '#ffffff',
+            fontSize: 0.04
+          });
+
+          // 測定結果表示行
+          const dataRow = grid.addRow({weight: 0.35});
+          this.lengthText = dataRow.addCol({weight: 0.5}).addText({
+            text: '長さ: 0.0 cm',
+            fontColor: '#ffffff',
+            fontSize: 0.07
+          });
+          this.bendText = dataRow.addCol({weight: 0.5}).addText({
+            text: '曲がり: 0.0 cm',
+            fontColor: '#ffffff',
+            fontSize: 0.07
+          });
+
+          // 等級判定表示
+          this.gradeText = grid.addRow({weight: 0.3}).addText({
+            text: '判定: -',
+            fontColor: '#ffffff',
+            fontSize: 0.09
+          });
+        }
+
+        /**
+         * 毎フレーム呼ばれる更新処理（頭の動きに合わせてUIを追従させる）
+         */
+        update() {
+          super.update();
+          if (this.panel) {
+            const camera = xb.core.camera;
+            
+            // カメラの前方パネル距離の位置を計算
+            const targetPos = new THREE.Vector3(0, -0.2, -xb.user.panelDistance);
+            targetPos.applyMatrix4(camera.matrixWorld);
+            
+            // パネルの位置と回転をカメラに滑らかに追従させる（lerp/slerp）
+            this.panel.position.lerp(targetPos, 0.1);
+            this.panel.quaternion.slerp(camera.quaternion, 0.1);
+          }
+        }
+
+        /**
+         * 測定点から「全長」と「最大湾曲」を計算する
+         */
+        calculateMetrics(points) {
+          if (points.length < 2) return { length: 0, maxBend: 0 };
+
+          // 1. 長さの計算（各線分の合計）
+          let totalLength = 0;
+          for (let i = 1; i < points.length; i++) {
+            totalLength += points[i].distanceTo(points[i-1]);
+          }
+
+          // 2. 曲がりの計算（始点と終点を結んだ弦からの最大距離）
+          const start = points[0];
+          const end = points[points.length - 1];
+          const chord = new THREE.Line3(start, end);
+          const closestPoint = new THREE.Vector3();
+          
+          let maxBend = 0;
+          for (let i = 1; i < points.length - 1; i++) {
+            chord.closestPointToPoint(points[i], true, closestPoint);
+            const dist = points[i].distanceTo(closestPoint);
+            if (dist > maxBend) maxBend = dist;
+          }
+
+          return { length: totalLength, maxBend: maxBend };
+        }
+
+        updateUI(isFinal = false) {
+          const metrics = this.calculateMetrics(this.points);
+          // メートルをセンチメートルに変換
+          const lenCm = parseFloat((metrics.length * 100).toFixed(1));
+          const bendCm = parseFloat((metrics.maxBend * 100).toFixed(1));
+
+          this.lengthText.setText(`長さ: ${lenCm.toFixed(1)} cm`);
+          this.bendText.setText(`曲がり: ${bendCm.toFixed(1)} cm`);
+
+          if (isFinal) {
+            // 1. 曲がり（等級）の判定と色の決定
+            let grade = '規格外';
+            let colorHex = 0x222222; // グレー
+            let textColor = '#aaaaaa';
+            let panelBgColor = '#222222aa';
+
+            if (bendCm <= 1.0) {
+              grade = 'A';
+              colorHex = 0x2ecc71; // 緑
+              textColor = '#2ecc71';
+              panelBgColor = '#2ecc71aa';
+            } else if (bendCm <= 3.0) {
+              grade = 'B';
+              colorHex = 0xf1c40f; // 黄色
+              textColor = '#f1c40f';
+              panelBgColor = '#f1c40faa';
+            } else if (bendCm <= 4.0) {
+              grade = 'C';
+              colorHex = 0xe74c3c; // 赤
+              textColor = '#e74c3c';
+              panelBgColor = '#e74c3caa';
+            }
+
+            // 2. 長さ（階級）の判定
+            let sizeClass = '3L';
+            if (lenCm <= 17.0) {
+              sizeClass = '規格外';
+            } else if (lenCm <= 19.0) {
+              sizeClass = 'M';
+            } else if (lenCm <= 22.0) {
+              sizeClass = 'L';
+            } else if (lenCm <= 25.0) {
+              sizeClass = '2L';
+            }
+
+            // 3. 総合判定の文字列生成（等級＋階級）
+            let finalGradeStr = '';
+            if (grade === '規格外' || sizeClass === '規格外') {
+              finalGradeStr = '規格外';
+            } else {
+              finalGradeStr = `${grade}${sizeClass}品`;
+            }
+
+            this.gradeText.fontColor = textColor;
+            this.gradeText.setText(`判定: ${finalGradeStr}`);
+            this.statusText.setText('測定完了！再度ピンチすると新しく測定します。');
+
+            // 描画されたナスの色を「曲がりの基準」の判定結果色に変更
+            if (this.currentPainter && this.currentPainter.mesh) {
+              this.currentPainter.mesh.material.color.setHex(colorHex);
+            }
+            
+            // パネル自体の背景色も同様に変更
+            if (this.panel) {
+              this.panel.backgroundColor = panelBgColor;
+              if (this.panel.updateLayouts) this.panel.updateLayouts();
+            }
+          } else {
+            this.gradeText.fontColor = '#ffffff';
+            this.gradeText.setText(`測定中...`);
+            this.statusText.setText('ナスをなぞっています...');
+            
+            // 測定中はパネルの背景色をナス色に戻す
+            if (this.panel) {
+              this.panel.backgroundColor = '#4a235aaa';
+              if (this.panel.updateLayouts) this.panel.updateLayouts();
+            }
+          }
+        }
+
+        /**
+         * ピンチ開始：新しい測定線を書き始める
+         */
+        onSelectStart(event) {
+          const id = event.target.userData.id;
+          const cursor = xb.core.user.getPivotPosition(id);
+
+          // 古いペインターがあれば削除
+          if (this.currentPainter) {
+            this.remove(this.currentPainter.mesh);
+          }
+
+          // 新しいペインターを作成
+          this.currentPainter = new TubePainter();
+          // 測定中は仮の紫色
+          this.currentPainter.mesh.material.color.setHex(0xaf7ac5);
+          this.add(this.currentPainter.mesh);
+
+          this.currentPainter.moveTo(cursor);
+          this.points = [cursor.clone()];
+          this.updateUI();
+        }
+
+        /**
+         * ピンチ中：軌跡を追加して描画と計算を更新
+         */
+        onSelecting(event) {
+          const id = event.target.userData.id;
+          const cursor = xb.core.user.getPivotPosition(id);
+
+          const lastPoint = this.points[this.points.length - 1];
+          // 5mm以上の移動があった場合のみポイントを追加（手のブレ・ノイズ軽減）
+          if (cursor.distanceTo(lastPoint) > 0.005) {
+            this.currentPainter.lineTo(cursor);
+            this.currentPainter.update();
+            this.points.push(cursor.clone());
+            this.updateUI();
+          }
+        }
+
+        /**
+         * ピンチ終了：測定結果を確定し等級を判定
+         */
+        onSelectEnd(event) {
+          if (this.points.length > 2) {
+            this.updateUI(true);
+          } else {
+            this.statusText.setText('短すぎます。最初からやり直してください。');
+          }
+        }
+      }
+
+      // アプリケーションの初期化
+      document.addEventListener('DOMContentLoaded', function () {
+        const options = new xb.Options();
+        options.setAppTitle('Eggplant Tracker');
+        
+        // UIとハンドトラッキングの有効化
+        options.enableUI();
+        options.enableHands();
+        options.hands.enabled = true;
+        options.hands.visualization = true; // 自分の手を表示
+        options.simulator.defaultMode = xb.SimulatorMode.POSE;
+
+        xb.add(new EggplantMeasurement());
+        xb.init(options);
+      });
+    </script>
+  </body>
+</html>
