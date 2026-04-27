@@ -63,7 +63,7 @@
           this.panel = new xb.SpatialPanel({
             width: 1.4,
             height: 1.0,
-            backgroundColor: '#4a235aaa' // ナスをイメージした紫色の半透明
+            backgroundColor: '#4a235acc' // ナスをイメージした紫色 (20%透過 -> cc)
           });
           
           this.add(this.panel);
@@ -73,7 +73,7 @@
           // タイトル
           grid.addRow({weight: 0.15}).addText({
             text: '🍆 ナス自動測定システム',
-            fontColor: '#af7ac5',
+            fontColor: '#21082b',
             fontSize: 0.08
           });
 
@@ -196,30 +196,7 @@
           this.bendText.setText(`曲がり: ${bendCm.toFixed(1)} cm`);
 
           if (isFinal) {
-            // 1. 曲がり（等級）の判定と色の決定
-            let grade = '規格外';
-            let colorHex = 0x222222; // グレー
-            let textColor = '#aaaaaa';
-            let panelBgColor = '#222222aa';
-
-            if (bendCm <= 1.0) {
-              grade = 'A';
-              colorHex = 0x2ecc71; // 緑
-              textColor = '#2ecc71';
-              panelBgColor = '#2ecc71aa';
-            } else if (bendCm <= 3.0) {
-              grade = 'B';
-              colorHex = 0xf1c40f; // 黄色
-              textColor = '#f1c40f';
-              panelBgColor = '#f1c40faa';
-            } else if (bendCm <= 4.0) {
-              grade = 'C';
-              colorHex = 0xe74c3c; // 赤
-              textColor = '#e74c3c';
-              panelBgColor = '#e74c3caa';
-            }
-
-            // 2. 長さ（階級）の判定
+            // 1. 長さ（階級）の判定
             let sizeClass = '3L';
             if (lenCm <= 17.0) {
               sizeClass = '規格外';
@@ -229,6 +206,32 @@
               sizeClass = 'L';
             } else if (lenCm <= 25.0) {
               sizeClass = '2L';
+            }
+
+            // 2. 曲がり（等級）の判定と色の決定
+            let grade = '規格外';
+            let colorHex = 0x222222; // デフォルト（グレー）
+            let textColor = '#aaaaaa';
+            let panelBgColor = '#222222cc'; // 20%透過
+
+            // 長さが17.0cm以下の場合は、曲がりに関係なく規格外（グレー）のままにする
+            if (sizeClass !== '規格外') {
+              if (bendCm <= 1.0) {
+                grade = 'A';
+                colorHex = 0x2ecc71; // 緑
+                textColor = '#2ecc71';
+                panelBgColor = '#2ecc71cc'; // 20%透過
+              } else if (bendCm <= 3.0) {
+                grade = 'B';
+                colorHex = 0xf1c40f; // 黄色
+                textColor = '#f1c40f';
+                panelBgColor = '#f1c40fcc'; // 20%透過
+              } else if (bendCm <= 4.0) {
+                grade = 'C';
+                colorHex = 0xe74c3c; // 赤
+                textColor = '#e74c3c';
+                panelBgColor = '#e74c3ccc'; // 20%透過
+              }
             }
 
             // 3. 総合判定の文字列生成（等級＋階級）
@@ -243,9 +246,11 @@
             this.gradeText.setText(`判定: ${finalGradeStr}`);
             this.statusText.setText('測定完了！右手で再度ピンチすると新しく測定します。');
 
-            // 描画されたナスの色を判定結果色に変更
+            // 描画されたナスの色を判定結果色に変更し、20%透過にする
             if (this.currentPainter && this.currentPainter.mesh) {
               this.currentPainter.mesh.material.color.setHex(colorHex);
+              this.currentPainter.mesh.material.transparent = true;
+              this.currentPainter.mesh.material.opacity = 0.8;
             }
             
             // パネル自体の背景色も同様に変更
@@ -258,9 +263,9 @@
             this.gradeText.setText(`測定中...`);
             this.statusText.setText('右手でナスをなぞっています...');
             
-            // 測定中はパネルの背景色をナス色に戻す
+            // 測定中はパネルの背景色をナス色に戻す (20%透過)
             if (this.panel) {
-              this.panel.backgroundColor = '#4a235aaa';
+              this.panel.backgroundColor = '#4a235acc';
               if (this.panel.updateLayouts) this.panel.updateLayouts();
             }
           }
@@ -285,8 +290,10 @@
 
           // 新しいペインターを作成
           this.currentPainter = new TubePainter();
-          // 測定中は仮の紫色
+          // 測定中は仮の紫色にし、20%透過を設定
           this.currentPainter.mesh.material.color.setHex(0xaf7ac5);
+          this.currentPainter.mesh.material.transparent = true;
+          this.currentPainter.mesh.material.opacity = 0.8;
           this.add(this.currentPainter.mesh);
 
           this.currentPainter.moveTo(cursor);
